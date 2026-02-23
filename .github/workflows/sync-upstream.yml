@@ -1,0 +1,104 @@
+name: Sync Upstream & Build
+
+on:
+  schedule:
+    - cron: '0 */6 * * *' # every 6 hours
+  workflow_dispatch:
+
+permissions:
+  contents: write
+  packages: write
+
+jobs:
+  sync:
+    name: Sync from seerr-team/seerr
+    runs-on: ubuntu-24.04
+    outputs:
+      synced: ${{ steps.merge.outputs.synced }}
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure git
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+
+      - name: Fetch upstream
+        run: |
+          git remote add upstream https://github.com/seerr-team/seerr.git
+          git fetch upstream main
+
+      - name: Check if behind upstream
+        id: check
+        run: |
+          BEHIND=$(git rev-list HEAD..upstream/main --count)
+          echo "behind=$BEHIND" >> $GITHUB_OUTPUT
+          echo "Commits behind upstream: $BEHIND"
+
+      - name: Merge upstream/main
+        id: merge
+        if: steps.check.outputs.behind != '0'
+        run: |
+          if git merge upstream/main --no-edit; then
+            echo "synced=true" >> $GITHUB_OUTPUT
+          else
+            git merge --abort
+            echo "synced=false" >> $GITHUB_OUTPUT
+            echo "::error::Merge conflict detected — manual resolution required"
+            exit 1
+          fi
+
+      - name: Push to origin
+        if: steps.merge.outputs.synced == 'true'
+        run: git push origin main
+
+  build:
+    name: Build & Push to GHCR
+    needs: sync
+    if: needs.sync.outputs.synced == 'true'
+    runs-on: ubuntu-24.04
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+        with:
+          ref: main
+
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+
+      - name: Log in to GHCR
+        uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.repository_owner }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      - name: Set lowercase owner
+        run: echo "OWNER_LC=${OWNER,,}" >> $GITHUB_ENV
+        env:
+          OWNER: ${{ github.repository_owner }}
+
+      - name: Docker metadata
+        id: meta
+        uses: docker/metadata-action@v5
+        with:
+          images: ghcr.io/${{ env.OWNER_LC }}/seerr
+          tags: |
+            type=raw,value=latest
+            type=sha,prefix=,format=short
+
+      - name: Build and push
+        uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          tags: ${{ steps.meta.outputs.tags }}
+          labels: ${{ steps.meta.outputs.labels }}
+          build-args: |
+            COMMIT_TAG=${{ github.sha }}
+            BUILD_DATE=${{ github.event.repository.updated_at }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
