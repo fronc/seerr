@@ -3,7 +3,7 @@ name: Build Custom Seerr
 on:
   push:
     branches:
-      - admin-auto-approve-fix
+      - develop
   workflow_dispatch:  # Allow manual trigger
 
 env:
