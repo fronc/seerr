@@ -7,7 +7,6 @@ on:
 permissions:
   contents: write
   packages: write
-  workflows: write
 
 jobs:
   sync:
@@ -20,6 +19,7 @@ jobs:
         uses: actions/checkout@v5
         with:
           fetch-depth: 0
+          token: ${{ secrets.PAT_TOKEN }}
 
       - name: Configure git
         run: |
